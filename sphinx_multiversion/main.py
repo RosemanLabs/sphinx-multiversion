@@ -1,39 +1,15 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2025 Jan Holthuis <jan.holthuis@rub.de>
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice,
-# this list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-# POSSIBILITY OF SUCH DAMAGE.
-#
-# SPDX-License-Identifier: BSD-2-Clause
-
-import itertools
 import argparse
-import multiprocessing
 import contextlib
+import itertools
 import json
 import logging
+import multiprocessing
 import os
 import pathlib
 import re
+import shlex
+import shutil
 import string
 import subprocess
 import sys
@@ -41,9 +17,9 @@ import tempfile
 
 from sphinx import config as sphinx_config
 from sphinx import project as sphinx_project
+from sphinx.util import tags as sphinx_tags
 
-from . import sphinx
-from . import git
+from . import git, sphinx
 
 
 @contextlib.contextmanager
@@ -60,8 +36,7 @@ def load_sphinx_config_worker(q, confpath, confoverrides, add_defaults):
     try:
         with working_dir(confpath):
             current_config = sphinx_config.Config.read(
-                confpath,
-                confoverrides,
+                confpath, confoverrides, sphinx_tags.Tags()
             )
 
         if add_defaults:
@@ -93,6 +68,9 @@ def load_sphinx_config_worker(q, confpath, confoverrides, add_defaults):
                 str,
             )
             current_config.add("smv_prefer_remote_refs", False, "html", bool)
+            current_config.add("smv_latest_version", "", "html", str)
+            current_config.add("smv_rename_latest_version", "", "html", str)
+
         current_config.pre_init_values()
         current_config.init_values()
     except Exception as err:
@@ -146,6 +124,20 @@ def get_python_flags():
             yield from ("-X", "{}={}".format(option, value))
 
 
+def run_commands(commands, current_cwd, env, name):
+    for command in commands:
+        try:
+            subprocess.check_call(command, cwd=current_cwd, env=env)
+        except OSError as err:
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Command '%s' failed for build '%s': '%s'",
+                command,
+                name,
+                err,
+            )
+
+
 def main(argv=None):
     if not argv:
         argv = sys.argv[1:]
@@ -186,6 +178,18 @@ def main(argv=None):
         action="store_true",
         help="dump generated metadata and exit",
     )
+    parser.add_argument(
+        "--pre-build",
+        action="append",
+        default=[],
+        help="a list of commands to run before running sphinx-build",
+    )
+    parser.add_argument(
+        "--post-build",
+        action="append",
+        default=[],
+        help="a list of commands to run after running sphinx-build",
+    )
     args, argv = parser.parse_known_args(argv)
     if args.noconfig:
         return 1
@@ -206,22 +210,20 @@ def main(argv=None):
         confoverrides[key] = value
 
     # Parse config
-    config = load_sphinx_config(
-        confdir_absolute, confoverrides, add_defaults=True
-    )
+    config = load_sphinx_config(confdir_absolute, confoverrides, add_defaults=True)
+
+    # Parse pre build commands
+    pre_build_commands = [shlex.split(command) for command in args.pre_build]
+    post_build_commands = [shlex.split(command) for command in args.post_build]
 
     # Get relative paths to root of git repository
-    gitroot = pathlib.Path(
-        git.get_toplevel_path(cwd=sourcedir_absolute)
-    ).resolve()
+    gitroot = pathlib.Path(git.get_toplevel_path(cwd=sourcedir_absolute)).resolve()
     cwd_absolute = os.path.abspath(".")
     cwd_relative = os.path.relpath(cwd_absolute, str(gitroot))
 
     logger.debug("Git toplevel path: %s", str(gitroot))
     sourcedir = os.path.relpath(sourcedir_absolute, str(gitroot))
-    logger.debug(
-        "Source dir (relative to git toplevel path): %s", str(sourcedir)
-    )
+    logger.debug("Source dir (relative to git toplevel path): %s", str(sourcedir))
     if args.confdir:
         confdir = os.path.relpath(confdir_absolute, str(gitroot))
     else:
@@ -280,6 +282,16 @@ def main(argv=None):
                 ref=gitref,
                 config=current_config,
             )
+
+            # Rename outputdir to latest version name
+            aliasdir = ""
+            if (
+                config.smv_latest_version == gitref.name
+                and config.smv_rename_latest_version
+            ):
+                aliasdir = outputdir
+                outputdir = config.smv_rename_latest_version
+
             if outputdir in outputdirs:
                 logger.warning(
                     "outputdir '%s' for %s conflicts with other versions",
@@ -295,14 +307,13 @@ def main(argv=None):
                 source_suffixes = [current_config.source_suffix]
 
             current_sourcedir = os.path.join(repopath, sourcedir)
-            project = sphinx_project.Project(
-                current_sourcedir, source_suffixes
-            )
+            project = sphinx_project.Project(current_sourcedir, source_suffixes)
             metadata[gitref.name] = {
                 "name": gitref.name,
                 "version": current_config.version,
                 "release": current_config.release,
                 "rst_prolog": current_config.rst_prolog,
+                "exclude_patterns": current_config.exclude_patterns,
                 "is_released": bool(
                     re.match(config.smv_released_pattern, gitref.refname)
                 ),
@@ -310,9 +321,10 @@ def main(argv=None):
                 "creatordate": gitref.creatordate.strftime(sphinx.DATE_FMT),
                 "basedir": repopath,
                 "sourcedir": current_sourcedir,
-                "outputdir": os.path.join(
-                    os.path.abspath(args.outputdir), outputdir
-                ),
+                "outputdir": os.path.join(os.path.abspath(args.outputdir), outputdir),
+                "aliasdir": ""
+                if not aliasdir
+                else os.path.join(os.path.abspath(args.outputdir), aliasdir),
                 "confdir": confpath,
                 "docnames": list(project.discover()),
             }
@@ -336,16 +348,15 @@ def main(argv=None):
             os.makedirs(data["outputdir"], exist_ok=True)
 
             defines = itertools.chain(
-                *(
-                    ("-D", string.Template(d).safe_substitute(data))
-                    for d in args.define
-                )
+                *(("-D", string.Template(d).safe_substitute(data)) for d in args.define)
             )
 
             current_argv = argv.copy()
             current_argv.extend(
                 [
                     *defines,
+                    "-j",
+                    "auto",
                     "-D",
                     "smv_current_version={}".format(version_name),
                     "-c",
@@ -375,6 +386,22 @@ def main(argv=None):
                     "SPHINX_MULTIVERSION_CONFDIR": data["confdir"],
                 }
             )
+
+            if pre_build_commands:
+                logger.debug("Running pre build commands:")
+                run_commands(pre_build_commands, current_cwd, env, data["name"])
+
+            # Build Sphinx
             subprocess.check_call(cmd, cwd=current_cwd, env=env)
+
+            if post_build_commands:
+                logger.debug("Running post build commands:")
+                run_commands(post_build_commands, current_cwd, env, data["name"])
+
+            # Create alias for latest version
+            if data["aliasdir"]:
+                if os.path.exists(data["aliasdir"]):
+                    shutil.rmtree(data["aliasdir"], ignore_errors=True)
+                shutil.copytree(data["outputdir"], data["aliasdir"])
 
     return 0

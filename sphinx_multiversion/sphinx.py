@@ -1,40 +1,16 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2025 Jan Holthuis <jan.holthuis@rub.de>
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice,
-# this list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-# POSSIBILITY OF SUCH DAMAGE.
-#
-# SPDX-License-Identifier: BSD-2-Clause
-
+import collections
 import datetime
 import json
-import collections
 import logging
 import os
 import posixpath
+from packaging.version import Version as LooseVersion
 
 from sphinx import config as sphinx_config
-from sphinx.util import i18n as sphinx_i18n
 from sphinx.locale import _
+from sphinx.util import i18n as sphinx_i18n
+from sphinx.util import tags as sphinx_tags
 
 logger = logging.getLogger(__name__)
 
@@ -75,35 +51,39 @@ class VersionInfo:
 
     @property
     def tags(self):
-        return [
+        result = [
             self._dict_to_versionobj(v)
             for v in self.metadata.values()
             if v["source"] == "tags"
         ]
+        return sorted(result, key=lambda v: LooseVersion(v.name))
 
     @property
     def branches(self):
-        return [
+        result = [
             self._dict_to_versionobj(v)
             for v in self.metadata.values()
             if v["source"] != "tags"
         ]
+        return sorted(result, key=lambda v: LooseVersion(v.name))
 
     @property
     def releases(self):
-        return [
+        result = [
             self._dict_to_versionobj(v)
             for v in self.metadata.values()
             if v["is_released"]
         ]
+        return sorted(result, key=lambda v: LooseVersion(v.name))
 
     @property
     def in_development(self):
-        return [
+        result = [
             self._dict_to_versionobj(v)
             for v in self.metadata.values()
             if not v["is_released"]
         ]
+        return sorted(result, key=lambda v: LooseVersion(v.name))
 
     def __iter__(self):
         for item in self.tags:
@@ -125,9 +105,7 @@ class VersionInfo:
 
     def vpathto(self, other_version_name):
         if self.current_version_name == other_version_name:
-            return "{}.html".format(
-                posixpath.split(self.context["pagename"])[-1]
-            )
+            return "{}.html".format(posixpath.split(self.context["pagename"])[-1])
 
         # Find relative outputdir paths from common output root
         current_version = self.metadata[self.current_version_name]
@@ -137,25 +115,19 @@ class VersionInfo:
         other_outputroot = os.path.abspath(other_version["outputdir"])
         outputroot = os.path.commonpath((current_outputroot, other_outputroot))
 
-        current_outputroot = os.path.relpath(
-            current_outputroot, start=outputroot
-        )
+        current_outputroot = os.path.relpath(current_outputroot, start=outputroot)
         other_outputroot = os.path.relpath(other_outputroot, start=outputroot)
 
         # Ensure that we use POSIX separators in the path (for the HTML code)
         if os.sep != posixpath.sep:
-            current_outputroot = posixpath.join(
-                *os.path.split(current_outputroot)
-            )
+            current_outputroot = posixpath.join(*os.path.split(current_outputroot))
             other_outputroot = posixpath.join(*os.path.split(other_outputroot))
 
         # Find relative path to root of other_version's outputdir
         current_outputdir = posixpath.dirname(
             posixpath.join(current_outputroot, self.context["pagename"])
         )
-        other_outputdir = posixpath.relpath(
-            other_outputroot, start=current_outputdir
-        )
+        other_outputdir = posixpath.relpath(other_outputroot, start=current_outputdir)
 
         if not self.vhasdoc(other_version_name):
             return posixpath.join(other_outputdir, "index.html")
@@ -203,12 +175,13 @@ def config_inited(app, config):
     app.connect("html-page-context", html_page_context)
 
     # Restore config values
-    old_config = sphinx_config.Config.read(data["confdir"])
+    old_config = sphinx_config.Config.read(data["confdir"], tags=sphinx_tags.Tags())
     old_config.pre_init_values()
     old_config.init_values()
     config.version = data["version"]
     config.release = data["release"]
     config.rst_prolog = data["rst_prolog"]
+    config.exclude_patterns = data["exclude_patterns"]
     config.today = old_config.today
     if not config.today:
         config.today = sphinx_i18n.format_date(
@@ -223,19 +196,12 @@ def setup(app):
     app.add_config_value("smv_metadata_path", "", "html")
     app.add_config_value("smv_current_version", "", "html")
     app.add_config_value("smv_latest_version", "master", "html")
+    app.add_config_value("smv_rename_latest_version", "", "html")
     app.add_config_value("smv_tag_whitelist", DEFAULT_TAG_WHITELIST, "html")
-    app.add_config_value(
-        "smv_branch_whitelist", DEFAULT_BRANCH_WHITELIST, "html"
-    )
-    app.add_config_value(
-        "smv_remote_whitelist", DEFAULT_REMOTE_WHITELIST, "html"
-    )
-    app.add_config_value(
-        "smv_released_pattern", DEFAULT_RELEASED_PATTERN, "html"
-    )
-    app.add_config_value(
-        "smv_outputdir_format", DEFAULT_OUTPUTDIR_FORMAT, "html"
-    )
+    app.add_config_value("smv_branch_whitelist", DEFAULT_BRANCH_WHITELIST, "html")
+    app.add_config_value("smv_remote_whitelist", DEFAULT_REMOTE_WHITELIST, "html")
+    app.add_config_value("smv_released_pattern", DEFAULT_RELEASED_PATTERN, "html")
+    app.add_config_value("smv_outputdir_format", DEFAULT_OUTPUTDIR_FORMAT, "html")
     app.connect("config-inited", config_inited)
 
     return {

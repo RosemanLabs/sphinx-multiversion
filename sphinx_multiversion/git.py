@@ -1,30 +1,4 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2025 Jan Holthuis <jan.holthuis@rub.de>
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice,
-# this list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-# POSSIBILITY OF SUCH DAMAGE.
-#
-# SPDX-License-Identifier: BSD-2-Clause
-
 import collections
 import datetime
 import logging
@@ -48,6 +22,9 @@ GitRef = collections.namedtuple(
 
 logger = logging.getLogger(__name__)
 
+env = os.environ.copy()
+env["GIT_LFS_SKIP_SMUDGE"] = "1"
+
 
 def get_toplevel_path(cwd=None):
     cmd = (
@@ -55,7 +32,7 @@ def get_toplevel_path(cwd=None):
         "rev-parse",
         "--show-toplevel",
     )
-    output = subprocess.check_output(cmd, cwd=cwd).decode()
+    output = subprocess.check_output(cmd, cwd=cwd, env=env).decode()
     return output.rstrip("\n")
 
 
@@ -67,7 +44,7 @@ def get_all_refs(gitroot):
         "%(objectname)\t%(refname)\t%(creatordate:iso)",
         "refs",
     )
-    output = subprocess.check_output(cmd, cwd=gitroot).decode()
+    output = subprocess.check_output(cmd, cwd=gitroot, env=env).decode()
     for line in output.splitlines():
         is_remote = False
         fields = line.strip().split("\t")
@@ -76,14 +53,10 @@ def get_all_refs(gitroot):
 
         commit = fields[0]
         refname = fields[1]
-        creatordate = datetime.datetime.strptime(
-            fields[2], "%Y-%m-%d %H:%M:%S %z"
-        )
+        creatordate = datetime.datetime.strptime(fields[2], "%Y-%m-%d %H:%M:%S %z")
 
         # Parse refname
-        matchobj = re.match(
-            r"^refs/(heads|tags|remotes/[^/]+)/(\S+)$", refname
-        )
+        matchobj = re.match(r"^refs/(heads|tags|remotes/[^/]+)/(\S+)$", refname)
         if not matchobj:
             continue
         source = matchobj.group(1)
@@ -95,9 +68,7 @@ def get_all_refs(gitroot):
         yield GitRef(name, commit, source, is_remote, refname, creatordate)
 
 
-def get_refs(
-    gitroot, tag_whitelist, branch_whitelist, remote_whitelist, files=()
-):
+def get_refs(gitroot, tag_whitelist, branch_whitelist, remote_whitelist, files=()):
     for ref in get_all_refs(gitroot):
         if ref.source == "tags":
             if tag_whitelist is None or not re.match(tag_whitelist, ref.name):
@@ -109,9 +80,7 @@ def get_refs(
                 )
                 continue
         elif ref.source == "heads":
-            if branch_whitelist is None or not re.match(
-                branch_whitelist, ref.name
-            ):
+            if branch_whitelist is None or not re.match(branch_whitelist, ref.name):
                 logger.debug(
                     "Skipping '%s' because branch '%s' doesn't match the "
                     "whitelist pattern",
@@ -129,9 +98,7 @@ def get_refs(
                     remote_name,
                 )
                 continue
-            if branch_whitelist is None or not re.match(
-                branch_whitelist, ref.name
-            ):
+            if branch_whitelist is None or not re.match(branch_whitelist, ref.name):
                 logger.debug(
                     "Skipping '%s' because branch '%s' doesn't match the "
                     "whitelist pattern",
@@ -140,16 +107,13 @@ def get_refs(
                 )
                 continue
         else:
-            logger.debug(
-                "Skipping '%s' because its not a branch or tag", ref.refname
-            )
+            logger.debug("Skipping '%s' because its not a branch or tag", ref.refname)
             continue
 
         missing_files = [
             filename
             for filename in files
-            if filename != "."
-            and not file_exists(gitroot, ref.refname, filename)
+            if filename != "." and not file_exists(gitroot, ref.refname, filename)
         ]
         if missing_files:
             logger.debug(
@@ -174,7 +138,7 @@ def file_exists(gitroot, refname, filename):
         "{}:{}".format(refname, filename),
     )
     proc = subprocess.run(
-        cmd, cwd=gitroot, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        cmd, cwd=gitroot, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     return proc.returncode == 0
 
@@ -204,7 +168,7 @@ def copy_tree(gitroot, src, dst, reference, sourcepath="."):
             "--",
             sourcepath,
         )
-        subprocess.check_call(cmd, cwd=gitroot, stdout=fp)
+        subprocess.check_call(cmd, cwd=gitroot, env=env, stdout=fp)
         fp.seek(0)
         with tarfile.TarFile(fileobj=fp) as tarfp:
             # This should be safe, but still causes a warning with medium
