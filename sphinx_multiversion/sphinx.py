@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import posixpath
-from packaging.version import Version as LooseVersion
+from packaging.version import Version as PVersion
 
 from sphinx import config as sphinx_config
 from sphinx.locale import _
@@ -25,6 +25,7 @@ Version = collections.namedtuple(
     "Version",
     [
         "name",
+        "sort_name",
         "url",
         "version",
         "release",
@@ -41,8 +42,17 @@ class VersionInfo:
         self.current_version_name = current_version_name
 
     def _dict_to_versionobj(self, v):
+
+        digits = [i for i, v in enumerate(v["name"]) if v.isdigit()]
+        if digits:
+            sort_name = v["name"][digits[0]:digits[-1]+1]
+        else:
+            sort_name = v["name"]
+
+
         return Version(
             name=v["name"],
+            sort_name=sort_name,
             url=self.vpathto(v["name"]),
             version=v["version"],
             release=v["release"],
@@ -56,7 +66,7 @@ class VersionInfo:
             for v in self.metadata.values()
             if v["source"] == "tags"
         ]
-        return sorted(result, key=lambda v: LooseVersion(v.name))
+        return sorted(result, key=lambda v: PVersion(v.sort_name))
 
     @property
     def branches(self):
@@ -65,7 +75,7 @@ class VersionInfo:
             for v in self.metadata.values()
             if v["source"] != "tags"
         ]
-        return sorted(result, key=lambda v: LooseVersion(v.name))
+        return sorted(result, key=lambda v: PVersion(v.sort_name))
 
     @property
     def releases(self):
@@ -74,7 +84,7 @@ class VersionInfo:
             for v in self.metadata.values()
             if v["is_released"]
         ]
-        return sorted(result, key=lambda v: LooseVersion(v.name))
+        return sorted(result, key=lambda v: PVersion(v.sort_name))
 
     @property
     def in_development(self):
@@ -83,7 +93,7 @@ class VersionInfo:
             for v in self.metadata.values()
             if not v["is_released"]
         ]
-        return sorted(result, key=lambda v: LooseVersion(v.name))
+        return sorted(result, key=lambda v: PVersion(v.sort_name))
 
     def __iter__(self):
         for item in self.tags:
