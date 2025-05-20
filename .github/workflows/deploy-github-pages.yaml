@@ -1,38 +1,39 @@
-name: Deploy docs to Github Pages
-
-on:
-  push:
-    branches: [main, 'release/v*']
-    tags: ['v*']
-
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
-jobs:
-  build:
-    uses: ./.github/workflows/build.yaml
-    with:
-      # Always use the default branch for building the documentation
-      # Otherwise, we might build our documentation with an old SMV version
-      ref: ${{ github.event.repository.default_branch }}
-      upload-documentation-artifacts: true
-
-  deploy-docs:
-    name: Deploy Docs to GitHub Pages
-    if: github.ref_protected == true
-    runs-on: ubuntu-latest
-    needs: [build]
-    permissions:
-      pages: write     # to deploy to Pages
-      id-token: write  # to verify the deployment originates from an appropriate source
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+#name: Deploy docs to Github Pages
+#
+#on:
+#  push:
+#    branches: [main, 'release/v*']
+#    tags: ['v*']
+#
+## Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+## However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+#concurrency:
+#  group: "pages"
+#  cancel-in-progress: false
+#
+#jobs:
+#  build:
+#    uses: ./.github/workflows/build.yaml
+#    with:
+#      # Always use the default branch for building the documentation
+#      # Otherwise, we might build our documentation with an old SMV version
+#      ref: ${{ github.event.repository.default_branch }}
+#      upload-documentation-artifacts: true
+#
+#  deploy-docs:
+#    name: Deploy Docs to GitHub Pages
+#    if: github.ref_protected == true
+#    runs-on: ubuntu-latest
+#    needs: [build]
+#    permissions:
+#      pages: write     # to deploy to Pages
+#      id-token: write  # to verify the deployment originates from an appropriate source
+#    environment:
+#      name: github-pages
+#      url: ${{ steps.deployment.outputs.page_url }}
+#
+#    steps:
+#      - name: Deploy to GitHub Pages
+#        id: deployment
+#        uses: actions/deploy-pages@v4
+#
